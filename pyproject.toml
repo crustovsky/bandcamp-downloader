@@ -1,0 +1,15 @@
+[project]
+name = "bandcamp-downloader"
+version = "0.1.0"
+requires-python = ">=3.10"
+dependencies = [
+    "curl-cffi",
+    "beautifulsoup4",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project.scripts]
+bandcamp-dl = "bandcamp_downloader:main"
