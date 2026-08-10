@@ -5,7 +5,7 @@ collection. Browse your library in the terminal, pick items by number, and get
 them extracted into a tidy `Artist/Album/` tree.
 
 Inspired by and built on the approach in
-[meeb/bandcampsync](https://github.com/meeb/bandcampsync) — this is a simpler,
+[meeb/bandcampsync](https://github.com/meeb/bandcampsync), but as a simpler,
 interactive alternative rather than a sync daemon.
 
 Only your own purchases are accessible. Authentication is your own browser
@@ -26,11 +26,11 @@ uv sync
 
 The tool needs the cookies from a logged-in Bandcamp session. Export them from
 your browser with any `cookies.txt` extension (Netscape format), or paste a raw
-`Cookie:` header — both are accepted. Save the result as `cookies.txt`.
+`Cookie:` header; both are accepted. Save the result as `cookies.txt`.
 
 The file must contain an `identity` cookie; the tool errors out early if it
-doesn't. `cookies.txt` is gitignored — it is a live session credential, so treat
-it like a password.
+doesn't. `cookies.txt` is gitignored, since it is a live session credential.
+Treat it like a password.
 
 ## Usage
 
@@ -71,7 +71,7 @@ page.
 For each selected item:
 
 1. Resolves the download page for that purchase
-2. Picks the best available format — FLAC, falling back to MP3 320 then MP3 V0
+2. Picks the best available format: FLAC, falling back to MP3 320 then MP3 V0
 3. Downloads the archive with a progress readout
 4. Extracts it to `<output>/<Artist>/<Album>/`, stripping the redundant
    `Artist - Album - ` prefix from track filenames so they sort as `01 Track.flac`
