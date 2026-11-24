@@ -15,6 +15,7 @@ session, so the tool can only ever reach music already in your collection.
 
 - Python 3.10+
 - [`uv`](https://docs.astral.sh/uv/)
+- OpenSSH (`ssh` and `sftp`), only if you upload to an SFTP destination
 
 ## Install
 
@@ -40,7 +41,7 @@ uv run bandcamp-dl -O ~/Music
 
 | Flag | Effect |
 | --- | --- |
-| `-O <dir>` | Output directory (required) |
+| `-O <output>` | Output directory, or an `sftp://` URL (required) |
 | `--cookies`, `-c` | Path to the cookies file (default: `cookies.txt`) |
 
 Your collection is listed 10 items at a time:
@@ -65,6 +66,28 @@ Showing 1-10 of 42
 
 Item numbers are global, so you can request anything in the collection from any
 page.
+
+### Uploading over SFTP
+
+`-O` also accepts `sftp://[user@]host[:port]/path`, which sends albums straight
+to another machine (a NAS, for example) instead of a local folder:
+
+```bash
+uv run bandcamp-dl -O sftp://me@nas/mnt/media/Music
+```
+
+The path is absolute on the remote host; use `sftp://host/~/Music` for a path
+relative to your home directory. The remote directory is created if it is
+missing.
+
+Transfers go through the system `ssh` and `sftp` binaries, so `~/.ssh/config`
+aliases, keys, agents and `known_hosts` behave as usual. One connection is
+opened at startup and reused for every album, so a password or key passphrase
+is asked for only once.
+
+Each album is downloaded and extracted to a temporary directory, uploaded, then
+removed locally. If an upload fails, the temporary copy is kept and its path is
+printed, so nothing has to be downloaded again.
 
 ## What it does
 
