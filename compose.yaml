@@ -1,0 +1,20 @@
+# Unattended sync: downloads new purchases into MUSIC_DIR. Settings live in .env
+# (see .env.example); cookies.txt and the sync state live in ./config.
+services:
+  bandcamp-sync:
+    build: .
+    container_name: bandcamp-sync
+    restart: unless-stopped
+    user: "${PUID:-1000}:${PGID:-1000}"
+    environment:
+      - TZ=${TZ:-UTC}
+    command:
+      - --sync
+      - --every=${SYNC_HOURS:-24}
+      - --require-existing
+      - -O=/music
+      - --cookies=/config/cookies.txt
+      - --state=/config/state.json
+    volumes:
+      - ${MUSIC_DIR:?set MUSIC_DIR in .env}:/music
+      - ./config:/config

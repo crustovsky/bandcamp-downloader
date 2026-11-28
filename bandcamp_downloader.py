@@ -54,6 +54,11 @@ def create_session(cookies):
 
 def extract_pagedata(soup, id_name="pagedata"):
     tag = soup.find("div", id=id_name)
+    if (not tag or "data-blob" not in tag.attrs) and soup.title and "Challenge" in (soup.title.string or ""):
+        raise SystemExit(
+            "Bandcamp answered with a bot challenge page instead of the site. "
+            "The cookies may be fine; try another curl-cffi version."
+        )
     if not tag or "data-blob" not in tag.attrs:
         raise SystemExit(
             f'Failed to locate <div id="{id_name}"> in HTML. '
@@ -105,7 +110,11 @@ def fetch_collection(session, fan_id):
             break
         older_than_token = data.get("last_token", "")
 
-    return items
+    # Bandcamp's pages overlap, so the same purchase comes back more than once.
+    unique = {}
+    for item in items:
+        unique.setdefault((item["sale_item_type"], item["sale_item_id"]), item)
+    return list(unique.values())
 
 
 def display_menu(items, start, page_size):
@@ -195,7 +204,7 @@ def check_download_stat(session, file_download_url):
     return file_download_url
 
 
-def download_file(session, url, dest_path):
+def download_file(session, url, dest_path, progress=True):
     resp = session.get(url, stream=True)
     resp.raise_for_status()
     total = int(resp.headers.get("content-length", 0))
@@ -204,10 +213,13 @@ def download_file(session, url, dest_path):
         for chunk in resp.iter_content(chunk_size=1024 * 64):
             f.write(chunk)
             downloaded += len(chunk)
-            if total:
+            if total and progress:
                 pct = downloaded * 100 // total
                 print(f"\r  Downloading... {pct}%", end="", flush=True)
-    print()
+    if progress:
+        print()
+    else:  # a progress bar is noise in a log
+        print(f"  Downloaded {downloaded / 1e6:.0f} MB")
 
 
 def rename_track(filename):
@@ -448,18 +460,23 @@ def make_destination(output):
     return LocalDestination(output)
 
 
-def download_album(session, item, destination):
+def download_album(session, item, destination, interactive=True):
+    """Returns True when the item is in place: downloaded now, or already there."""
     if not item.get("download_url"):
         print("  No download URL available for this item.")
-        return
+        return False
 
     band_name, item_title = item["band_name"], item["item_title"]
     where = destination.describe(band_name, item_title)
     if destination.has_content(band_name, item_title):
+        if not interactive:
+            # An unattended run never touches an album folder that already exists.
+            print(f"  {where} already exists. Left as it is.")
+            return True
         answer = input(f"  {where} already exists. Overwrite? [y/N] ").strip().lower()
         if answer != "y":
             print("  Skipped.")
-            return
+            return True
 
     print(f"  Fetching download page...")
     download_url = resolve_download_url(session, item["download_url"], item["item_id"])
@@ -471,7 +488,7 @@ def download_album(session, item, destination):
         tmp_path = tmp.name
 
     try:
-        download_file(session, final_url, tmp_path)
+        download_file(session, final_url, tmp_path, progress=interactive)
 
         with destination.staging(band_name, item_title) as dest:
             if zipfile.is_zipfile(tmp_path):
@@ -481,6 +498,7 @@ def download_album(session, item, destination):
                 fname = Path(final_url.split("?")[0]).name or "download"
                 shutil.move(tmp_path, str(dest / fname))
         print(f"  Saved to: {where}")
+        return True
     finally:
         if os.path.exists(tmp_path):
             os.unlink(tmp_path)
@@ -514,12 +532,94 @@ def interactive_loop(session, items, destination):
                 download_album(session, item, destination)
 
 
+def item_key(item):
+    return f"{item.get('sale_item_type')}{item.get('sale_item_id')}"
+
+
+def load_state(state_path):
+    """Keys of the purchases already dealt with, or None before the first sync."""
+    if not state_path.exists():
+        return None
+    return set(json.loads(state_path.read_text())["done"])
+
+
+def save_state(state_path, done):
+    tmp = state_path.with_suffix(".tmp")
+    tmp.write_text(json.dumps({"done": sorted(done)}, indent=1))
+    tmp.replace(state_path)
+
+
+def sync(session, items, destination, state_path):
+    """Download purchases not seen before. Unattended: asks nothing, overwrites nothing.
+
+    The first sync downloads nothing. It only records what is in the collection now,
+    so that a library which already holds older purchases, perhaps under other folder
+    names, is not filled with duplicates. Older items: use the interactive mode.
+    """
+    done = load_state(state_path)
+    if done is None:
+        save_state(state_path, {item_key(i) for i in items})
+        print(f"First sync: noted the {len(items)} purchases you already have. "
+              "Only purchases made from now on will be downloaded.")
+        return
+    new = [i for i in items if item_key(i) not in done]
+    print(f"{len(items)} purchases, {len(new)} new.")
+    for item in reversed(new):  # oldest first
+        print(f"New: {item['band_name']} - {item['item_title']}")
+        try:
+            if download_album(session, item, destination, interactive=False):
+                done.add(item_key(item))
+                save_state(state_path, done)
+        except (SystemExit, Exception) as e:  # this one is tried again at the next sync
+            print(f"  Failed, will retry: {e}")
+
+
+def sync_once(args):
+    cookies_path = Path(args.cookies).expanduser()
+    if not cookies_path.exists():
+        raise SystemExit(f"Cookies file not found: {cookies_path}")
+    destination = make_destination(args.output_dir)
+    if args.require_existing and isinstance(destination, LocalDestination):
+        root = destination.root
+        if not root.is_dir() or not any(root.iterdir()):
+            raise SystemExit(f"{root} is missing or empty (disk not mounted?). Nothing done.")
+    destination.prepare()
+    try:
+        session, items = connect(cookies_path)
+        sync(session, items, destination, Path(args.state).expanduser())
+    finally:
+        destination.close()
+
+
 def main():
     parser = argparse.ArgumentParser(description="Bandcamp Downloader")
     parser.add_argument("--cookies", "-c", default="cookies.txt", help="Path to cookies.txt (default: cookies.txt)")
     parser.add_argument("-O", required=True, dest="output_dir", metavar="OUTPUT",
                         help="Output directory, or sftp://[user@]host[:port]/path to upload over SFTP")
+    parser.add_argument("--sync", action="store_true",
+                        help="Unattended: download purchases made since the first sync, then exit")
+    parser.add_argument("--state", default="state.json", metavar="FILE",
+                        help="With --sync: file remembering which purchases are done (default: state.json)")
+    parser.add_argument("--every", type=float, metavar="HOURS",
+                        help="With --sync: keep running and sync again every HOURS hours")
+    parser.add_argument("--require-existing", action="store_true",
+                        help="With --sync: do nothing if a local output directory is missing or empty, "
+                             "so an unmounted disk is not written to")
     args = parser.parse_args()
+
+    if args.sync:
+        while True:
+            print(time.strftime("%Y-%m-%d %H:%M"), "sync", flush=True)
+            try:
+                sync_once(args)
+            except (SystemExit, Exception) as e:
+                # A missing or expired cookies file lands here. Say so; try again next time.
+                print(f"Sync failed: {e}", flush=True)
+                if not args.every:
+                    raise SystemExit(1)
+            if not args.every:
+                return
+            time.sleep(args.every * 3600)
 
     cookies_path = Path(args.cookies).expanduser()
     destination = make_destination(args.output_dir)
@@ -533,21 +633,18 @@ def main():
         destination.close()
 
 
-def run(cookies_path, destination):
-    print("Loading cookies...")
+def connect(cookies_path):
+    """A logged-in session and the collection, newest purchase first."""
     with open(cookies_path, "rt") as f:
-        cookies_str = f.read().strip()
-    cookies = load_cookies(cookies_str)
-
-    print("Creating session...")
+        cookies = load_cookies(f.read().strip())
     session = create_session(cookies)
-
-    print("Authenticating...")
     fan_id = get_fan_id(session)
-    print(f"Logged in (fan_id: {fan_id})")
+    return session, fetch_collection(session, fan_id)
 
-    print("Fetching library...")
-    items = fetch_collection(session, fan_id)
+
+def run(cookies_path, destination):
+    print("Authenticating and fetching library...")
+    session, items = connect(cookies_path)
     print(f"Found {len(items)} items.")
 
     if not items:

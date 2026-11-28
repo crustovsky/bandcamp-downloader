@@ -89,6 +89,57 @@ Each album is downloaded and extracted to a temporary directory, uploaded, then
 removed locally. If an upload fails, the temporary copy is kept and its path is
 printed, so nothing has to be downloaded again.
 
+## Unattended sync
+
+`--sync` downloads new purchases without asking anything, for use from a timer or
+a container:
+
+```bash
+uv run bandcamp-dl --sync -O ~/Music
+```
+
+| Flag | Effect |
+| --- | --- |
+| `--sync` | Download purchases made since the first sync, then exit |
+| `--state <file>` | Where the list of handled purchases is kept (default: `state.json`) |
+| `--every <hours>` | Keep running and sync again every so many hours |
+| `--require-existing` | Do nothing if a local output directory is missing or empty, so an unmounted disk is not written to |
+
+The first sync downloads nothing. It records what is in your collection at that
+moment, and only purchases made after it are downloaded. This keeps a library
+that already holds your older purchases, perhaps under different folder names,
+from being filled with duplicates. Use the interactive mode for older items.
+
+A sync never overwrites: if an album folder already exists and is not empty, it
+is left alone and the purchase is marked as handled. A download that fails is
+tried again at the next sync. `state.json` lists your purchases, so it is
+gitignored along with the cookies.
+
+If a sync logs that Bandcamp answered with a bot challenge page, the cookies are
+not the problem: Bandcamp turns away some releases of the HTTP library this tool
+uses. The Docker image pins a release known to work (`CURL_CFFI_VERSION` in the
+`Dockerfile`).
+
+When the cookies expire, each sync logs `Sync failed: ... Check your cookies
+file.` and nothing else happens until you replace them.
+
+### Docker
+
+`compose.yaml` runs the sync as a small container that stays up and syncs once
+a day:
+
+```bash
+cp .env.example .env        # set MUSIC_DIR
+mkdir config
+cp /path/to/cookies.txt config/cookies.txt
+docker compose up -d --build
+docker logs bandcamp-sync
+```
+
+`config/` holds `cookies.txt` and the sync state and is gitignored. After
+replacing the cookies, `docker restart bandcamp-sync` syncs straight away
+instead of at the next interval.
+
 ## What it does
 
 For each selected item:
